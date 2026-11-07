@@ -1,0 +1,31 @@
+# Start everything:  docker compose up --build
+# Chat UI:  http://localhost:8501     API docs:  http://localhost:8000/docs
+services:
+  api:
+    build: .
+    env_file: .env                     # GROQ_API_KEY etc., never baked into the image
+    ports:
+      - "8000:8000"
+    volumes:
+      - hr_data:/app/data/runtime      # vector index + telemetry survive restarts
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s                # first start builds the index
+    restart: unless-stopped
+
+  ui:
+    build: ./ui
+    environment:
+      - API_URL=http://api:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  hr_data:

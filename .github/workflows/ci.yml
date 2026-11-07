@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Unit tests (fake LLM, no API key)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build API image with test tools
+        run: docker build --build-arg INSTALL_DEV=true -t hr-assistant-api:ci .
+      - name: Run unit tests inside the image
+        run: docker run --rm hr-assistant-api:ci python -m pytest -q
+      - name: Build UI image
+        run: docker build -t hr-assistant-ui:ci ./ui
+
+  evaluation:
+    name: Evaluation quality gate (real LLM)
+    needs: test
+    # Costs API calls, so only on pushes to main.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build API image
+        run: docker build --build-arg INSTALL_DEV=true -t hr-assistant-api:ci .
+      - name: Build index, then score all questions
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          docker run --name eval -e GROQ_API_KEY hr-assistant-api:ci sh -c \
+            "python -m scripts.ingest && python -m scripts.eval_retrieval && \
+             python -m scripts.run_eval --delay 3 --min-behaviour 0.85 --max-unsafe 0.10 --min-correct 0.75"
+      - name: Copy reports out of the container
+        if: always()
+        run: docker cp eval:/app/eval/results ./eval-results || true
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: eval-results/
